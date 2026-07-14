@@ -1,10 +1,18 @@
 # [package:media_kit_libs_windows_video](https://github.com/media-kit/media-kit)
 
-[![](https://img.shields.io/discord/1079685977523617792?color=33cd57&label=Discord&logo=discord&logoColor=discord)](https://discord.gg/h7qf2R9n57) [![Github Actions](https://github.com/media-kit/media-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/media-kit/media-kit/actions/workflows/ci.yml)
-
 Windows package providing video (& audio) native libraries for [`package:media_kit`](https://github.com/media-kit/media-kit).
 
-Visit [media-kit/libmpv-win32-video-cmake@`master`](https://github.com/media-kit/libmpv-win32-video-cmake) & [media-kit/libmpv-win32-video-build@`master`](https://github.com/media-kit/libmpv-win32-video-build) for descriptive details.
+**This fork vendors libmpv and ANGLE under `windows/vendor/`** so Windows builds do not download dependencies from the network.
+
+Visit [media-kit/libmpv-win32-video-cmake](https://github.com/media-kit/libmpv-win32-video-cmake) for upstream build details.
+
+## Offline setup (maintainers)
+
+```powershell
+.\scripts\download_vendor.ps1
+```
+
+Commit `windows/vendor/**/*.7z` (use Git LFS for large binaries). See [windows/vendor/README.md](./windows/vendor/README.md).
 
 ## License
 

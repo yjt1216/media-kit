@@ -16,40 +16,12 @@ project(${PROJECT_NAME} LANGUAGES CXX)
 # Deal with MSVC incompatiblity
 add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
 
+# Offline native libraries are vendored under windows/vendor/ (see README + scripts/).
+set(MEDIA_KIT_WINDOWS_VIDEO_VENDOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/vendor")
+
 # ------------------------------------------------------------------------------
-function(download_and_verify url md5 locationForArchive)
-  # Check if the archive exists.
-  if(EXISTS "${locationForArchive}")
-    file(MD5 "${locationForArchive}" ARCHIVE_MD5)
-
-    # If MD5 doesn't match, delete the archive to download again.
-    if(NOT md5 STREQUAL ARCHIVE_MD5)
-      file(REMOVE "${locationForArchive}")
-      message(STATUS "MD5 mismatch. File deleted.")
-    endif()
-  endif()
-
-  # Download the archive if it doesn't exist.
-  if(NOT EXISTS "${locationForArchive}")
-    message(STATUS "Downloading archive from ${url}...")
-    file(DOWNLOAD "${url}" "${locationForArchive}")
-    message(STATUS "Downloaded archive to ${locationForArchive}.")
-
-    # Verify MD5 of the newly downloaded file.
-    file(MD5 "${locationForArchive}" ARCHIVE_MD5)
-
-    if(md5 STREQUAL ARCHIVE_MD5)
-      message(STATUS "${locationForArchive} Verification successful.")
-    else()
-      message(FATAL_ERROR "${locationForArchive} Integrity check failed, please try to re-build project again.")
-    endif()
-  endif()
-endfunction()
-
 function(check_directory_exists_and_not_empty dir result_var)
-  # Check if the directory exists
   if(EXISTS "${dir}")
-    # Check if the directory is not empty
     file(GLOB dir_contents "${dir}/*")
 
     if(dir_contents)
@@ -64,6 +36,56 @@ function(check_directory_exists_and_not_empty dir result_var)
   endif()
 endfunction()
 
+function(ensure_archive_from_vendor vendor_archive expected_md5 dest_archive)
+  if(EXISTS "${dest_archive}")
+    file(MD5 "${dest_archive}" actual_md5)
+
+    if(expected_md5 STREQUAL actual_md5)
+      return()
+    endif()
+
+    file(REMOVE "${dest_archive}")
+    message(STATUS "MD5 mismatch. Removed ${dest_archive}.")
+  endif()
+
+  if(NOT EXISTS "${vendor_archive}")
+    message(FATAL_ERROR
+      "Offline vendor archive not found: ${vendor_archive}\n"
+      "Run: libs/windows/media_kit_libs_windows_video/scripts/download_vendor.ps1"
+    )
+  endif()
+
+  file(MD5 "${vendor_archive}" vendor_md5)
+
+  if(NOT expected_md5 STREQUAL vendor_md5)
+    message(FATAL_ERROR
+      "Vendor archive integrity check failed: ${vendor_archive}\n"
+      "Expected MD5 ${expected_md5}, got ${vendor_md5}."
+    )
+  endif()
+
+  message(STATUS "Using offline vendor archive: ${vendor_archive}")
+  file(COPY "${vendor_archive}" DESTINATION "${CMAKE_BINARY_DIR}")
+endfunction()
+
+function(copy_vendor_tree_if_present vendor_dir dest_dir)
+  check_directory_exists_and_not_empty("${vendor_dir}" vendor_tree_valid)
+
+  if(NOT vendor_tree_valid)
+    return()
+  endif()
+
+  check_directory_exists_and_not_empty("${dest_dir}" dest_valid)
+
+  if(dest_valid)
+    return()
+  endif()
+
+  message(STATUS "Copying pre-extracted vendor tree ${vendor_dir} -> ${dest_dir}")
+  file(MAKE_DIRECTORY "${dest_dir}")
+  file(COPY "${vendor_dir}/" DESTINATION "${dest_dir}")
+endfunction()
+
 # Detect architecture and set appropriate libmpv archive
 if(${FLUTTER_TARGET_PLATFORM} STREQUAL "windows-x64")
   set(LIBMPV_ARCH "x86_64")
@@ -75,30 +97,34 @@ else()
   set(LIBMPV_MD5 "5b507a35db13eee6cb7eb21e8be7c83d")
 endif()
 
-# Download URL for the libmpv archive from the latest release
-set(LIBMPV_URL "https://github.com/media-kit/libmpv-win32-video-cmake/releases/download/20241021/${LIBMPV}")
+set(LIBMPV_VENDOR_DIR "${MEDIA_KIT_WINDOWS_VIDEO_VENDOR_ROOT}/${LIBMPV_ARCH}")
+set(LIBMPV_VENDOR_ARCHIVE "${LIBMPV_VENDOR_DIR}/${LIBMPV}")
+set(LIBMPV_VENDOR_SRC "${LIBMPV_VENDOR_DIR}/libmpv")
 
-# Download location of the libmpv archive.
 set(LIBMPV_ARCHIVE "${CMAKE_BINARY_DIR}/${LIBMPV}")
 set(LIBMPV_SRC "${CMAKE_BINARY_DIR}/libmpv")
 
-download_and_verify(
-  ${LIBMPV_URL}
-  ${LIBMPV_MD5}
-  ${LIBMPV_ARCHIVE}
-)
+copy_vendor_tree_if_present("${LIBMPV_VENDOR_SRC}" "${LIBMPV_SRC}")
 
 check_directory_exists_and_not_empty(${LIBMPV_SRC} LIBMPV_SRC_VALID)
 
-# Find 7zip for extraction (preferred for .7z files)
+if(NOT LIBMPV_SRC_VALID)
+  ensure_archive_from_vendor(
+    "${LIBMPV_VENDOR_ARCHIVE}"
+    "${LIBMPV_MD5}"
+    "${LIBMPV_ARCHIVE}"
+  )
+endif()
+
+check_directory_exists_and_not_empty(${LIBMPV_SRC} LIBMPV_SRC_VALID)
+
 find_program(SEVENZ_EXECUTABLE NAMES 7z 7za)
 
-# Extract the libmpv archive.
 if(NOT LIBMPV_SRC_VALID)
   message(STATUS "Extracting ${LIBMPV}...")
   make_directory("${LIBMPV_SRC}")
   add_custom_target("${PROJECT_NAME}_LIBMPV_EXTRACT" ALL)
-  
+
   if(SEVENZ_EXECUTABLE)
     message(STATUS "Using 7zip for extraction: ${SEVENZ_EXECUTABLE}")
     add_custom_command(
@@ -126,31 +152,35 @@ endif()
 
 # ------------------------------------------------------------------------------
 
-# ANGLE archive containing the pre-built shared libraries & headers.
 set(ANGLE "ANGLE.7z")
-
-# Download URL & MD5 hash of the ANGLE archive.
-set(ANGLE_URL "https://github.com/alexmercerind/flutter-windows-ANGLE-OpenGL-ES/releases/download/v1.0.1/ANGLE.7z")
 set(ANGLE_MD5 "e866f13e8d552348058afaafe869b1ed")
 
-# Download location of the ANGLE archive.
+set(ANGLE_VENDOR_DIR "${MEDIA_KIT_WINDOWS_VIDEO_VENDOR_ROOT}/common")
+set(ANGLE_VENDOR_ARCHIVE "${ANGLE_VENDOR_DIR}/${ANGLE}")
+set(ANGLE_VENDOR_SRC "${ANGLE_VENDOR_DIR}/ANGLE")
+
 set(ANGLE_ARCHIVE "${CMAKE_BINARY_DIR}/${ANGLE}")
 set(ANGLE_SRC "${CMAKE_BINARY_DIR}/ANGLE")
 
-download_and_verify(
-  ${ANGLE_URL}
-  ${ANGLE_MD5}
-  ${ANGLE_ARCHIVE}
-)
+copy_vendor_tree_if_present("${ANGLE_VENDOR_SRC}" "${ANGLE_SRC}")
 
 check_directory_exists_and_not_empty(${ANGLE_SRC} ANGLE_SRC_VALID)
 
-# Extract the ANGLE archive.
+if(NOT ANGLE_SRC_VALID)
+  ensure_archive_from_vendor(
+    "${ANGLE_VENDOR_ARCHIVE}"
+    "${ANGLE_MD5}"
+    "${ANGLE_ARCHIVE}"
+  )
+endif()
+
+check_directory_exists_and_not_empty(${ANGLE_SRC} ANGLE_SRC_VALID)
+
 if(NOT ANGLE_SRC_VALID)
   message(STATUS "Extracting ${ANGLE}...")
   make_directory("${ANGLE_SRC}")
   add_custom_target("${PROJECT_NAME}_ANGLE_EXTRACT" ALL)
-  
+
   if(SEVENZ_EXECUTABLE)
     message(STATUS "Using 7zip for extraction: ${SEVENZ_EXECUTABLE}")
     add_custom_command(
@@ -163,6 +193,7 @@ if(NOT ANGLE_SRC_VALID)
     message(STATUS "7zip not found, falling back to CMake tar")
     add_custom_command(
       TARGET "${PROJECT_NAME}_ANGLE_EXTRACT"
+      POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E tar xzf "\"${ANGLE_ARCHIVE}\""
       WORKING_DIRECTORY "${ANGLE_SRC}"
     )
